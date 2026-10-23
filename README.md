@@ -123,3 +123,9 @@ All settings are at the top of `quorum_server.py`:
 
 The Quorum code is released under the license in this repository. The models it downloads each have their own license, and you are responsible for following them. In particular, SDXL-Turbo is free for non-commercial use, and commercial use needs a Stability AI membership. Set `ENABLE_IMAGES = False` to turn it off.
 
+Use this URL: https://quorumbeta.netlify.app/
+to use the ai
+
+or
+
+Use the html and host your self to use the ai
