@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quorum Chat</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --text:#e8eaf0; --muted:#8b93a7;
+          --me:#2b5cff; --bot:#20242d; --accent:#2b5cff; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif;
+         display: flex; flex-direction: column; height: 100dvh; }
+  header { padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+           display: flex; gap: 10px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  select, input, textarea, button { font: inherit; color: var(--text); background: var(--bg);
+           border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  details { background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 14px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details label { display: block; margin-top: 8px; color: var(--muted); font-size: 14px; }
+  details input { width: 100%; margin-top: 4px; }
+  #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 88%; padding: 10px 13px; border-radius: 14px; white-space: pre-wrap;
+         word-break: break-word; }
+  .me { align-self: flex-end; background: var(--me); }
+  .bot { align-self: flex-start; background: var(--bot); border: 1px solid var(--line); }
+  .err { border-color: #c0392b; color: #ff9d92; }
+  .msg img { display: block; max-width: 100%; border-radius: 10px; margin: 6px 0; }
+  .msg pre { background: #0b0d11; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+             overflow-x: auto; margin: 6px 0; font: 13px/1.4 ui-monospace, Menlo, monospace; }
+  form { display: flex; gap: 8px; padding: 10px 14px; background: var(--panel);
+         border-top: 1px solid var(--line); }
+  textarea { flex: 1; resize: none; max-height: 140px; }
+  button { background: var(--accent); border-color: var(--accent); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quorum</h1>
+  <select id="mode">
+    <option>Quorum-Fast</option>
+    <option>Quorum-UltraFast</option>
+    <option>Quorum-Code</option>
+    <option>Quorum-Max</option>
+    <option value="image">Quorum-Image</option>
+  </select>
+</header>
+
+<details id="settings">
+  <summary>Settings</summary>
+  <label>Server URL (your ngrok link)
+    <input id="url" placeholder="https://xxxx.ngrok-free.app" autocomplete="off">
+  </label>
+  <label>API key
+    <input id="key" type="password" placeholder="your QUORUM_API_KEY" autocomplete="off">
+  </label>
+</details>
+
+<div id="log"></div>
+
+<form id="form">
+  <textarea id="input" rows="1" placeholder="Message Quorum… (or /image a red fox)"></textarea>
+  <button id="send" type="submit">Send</button>
+</form>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $("log"), input = $("input"), sendBtn = $("send");
+let history = [];
+
+// Remember URL, key and mode on this device (ignored if storage is blocked).
+function store(k, v) { try { v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch (e) {} }
+function read(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+$("url").value = read("q_url"); $("key").value = read("q_key");
+if (read("q_mode")) $("mode").value = read("q_mode");
+if (!$("url").value || !$("key").value) $("settings").open = true;
+$("url").oninput = () => store("q_url", $("url").value);
+$("key").oninput = () => store("q_key", $("key").value);
+$("mode").onchange = () => store("q_mode", $("mode").value);
+
+function baseUrl() { return $("url").value.trim().replace(/\/+$/, "").replace(/\/v1$/, ""); }
+
+// Show text, pictures (markdown images with data: URLs) and ``` code blocks.
+function render(el, text) {
+  el.textContent = "";
+  const re = /!\[[^\]]*\]\((data:image\/[a-z]+;base64,[A-Za-z0-9+\/=]+)\)|```[a-zA-Z0-9_+-]*\n([\s\S]*?)```/g;
+  let last = 0, m;
+  const addText = s => { if (s) el.appendChild(document.createTextNode(s)); };
+  while ((m = re.exec(text))) {
+    addText(text.slice(last, m.index));
+    if (m[1]) { const img = document.createElement("img"); img.src = m[1]; el.appendChild(img); }
+    else { const pre = document.createElement("pre"); pre.textContent = m[2]; el.appendChild(pre); }
+    last = re.lastIndex;
+  }
+  addText(text.slice(last));
+}
+
+function addMsg(role, text, isErr) {
+  const el = document.createElement("div");
+  el.className = "msg " + (role === "user" ? "me" : "bot") + (isErr ? " err" : "");
+  render(el, text);
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function call(path, body) {
+  const res = await fetch(baseUrl() + path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + $("key").value.trim(),
+      "ngrok-skip-browser-warning": "true"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data.error && data.error.message) || data.detail || ("HTTP " + res.status);
+    throw new Error(res.status === 401 ? "Wrong API key (401)" : msg);
+  }
+  return data;
+}
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  if (!baseUrl() || !$("key").value.trim()) { $("settings").open = true; return; }
+  input.value = ""; input.style.height = "auto";
+  addMsg("user", text);
+  sendBtn.disabled = true;
+  const wait = addMsg("assistant", "Thinking…");
+  try {
+    let reply;
+    if ($("mode").value === "image") {
+      const d = await call("/v1/images/generations", { prompt: text, size: "512x512" });
+      reply = "![image](data:image/png;base64," + d.data[0].b64_json + ")";
+      history.push({ role: "user", content: text }, { role: "assistant", content: "[image]" });
+    } else {
+      history.push({ role: "user", content: text });
+      const d = await call("/v1/chat/completions", { model: $("mode").value, messages: history });
+      reply = d.choices[0].message.content;
+      // Keep history small: don't send pictures back to the server.
+      history.push({ role: "assistant", content: reply.replace(/!\[[^\]]*\]\(data:[^)]*\)/g, "[image]") });
+    }
+    render(wait, reply);
+  } catch (err) {
+    if ($("mode").value !== "image") history.pop();   // drop the unanswered question
+    wait.classList.add("err");
+    render(wait, "Error: " + err.message);
+  }
+  sendBtn.disabled = false;
+  log.scrollTop = log.scrollHeight;
+  input.focus();
+});
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 140) + "px";
+});
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && window.innerWidth > 700) {
+    e.preventDefault();
+    $("form").requestSubmit();
+  }
+});
+</script>
+</body>
+</html>
